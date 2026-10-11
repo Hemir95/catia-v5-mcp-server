@@ -21,6 +21,13 @@ All notable changes to this project are documented here.
   dialog; if CATIA cannot recover, terminate CNEXT and restart the MCP process.
 
 ### Added
+- **Remote access over Streamable HTTP**: `catia-mcp --http` serves the tools
+  at `/mcp` so the agent can run on a Mac or another machine while CATIA runs
+  on a Windows PC or a cloud workstation. Loopback-only by default; binding
+  any other address requires a bearer token (`--token` or `CATIA_MCP_TOKEN`,
+  `--new-token` generates one), compared in constant time, with DNS-rebinding
+  protection on loopback. stdio stays the default and is unchanged. Setup for
+  Claude Code, Cursor, VS Code and Claude Desktop in docs/remote-access.md.
 - **Knowledgeware module (98 tools total)**: `catia_create_parameter`
   (lengths and angles valuated with explicit units), `catia_set_formula`
   (create or modify in place), `catia_list_relations`,

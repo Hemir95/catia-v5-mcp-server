@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import logging
@@ -186,7 +187,55 @@ class CATIAMCPServer:
             await self.close()
 
 
-def main() -> None:
+    async def run_http(self, host: str, port: int, token: str | None) -> None:
+        from catia_mcp.http_transport import serve
+
+        logger.info("Starting CATIA V5 MCP Server (HTTP): %d tools", len(self._tool_router))
+        try:
+            await serve(self.server, host, port, token)
+        finally:
+            await self.close()
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    from catia_mcp.http_transport import DEFAULT_HOST, DEFAULT_PORT
+
+    parser = argparse.ArgumentParser(
+        prog="catia-mcp",
+        description="CATIA V5 MCP server. Uses stdio by default; --http serves remote agents.",
+    )
+    parser.add_argument(
+        "--http",
+        action="store_true",
+        help="Serve over Streamable HTTP at /mcp instead of stdio (remote agents, Mac clients)",
+    )
+    parser.add_argument("--host", default=DEFAULT_HOST, help="Bind address (default 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Port (default 8765)")
+    parser.add_argument(
+        "--token",
+        default=os.environ.get("CATIA_MCP_TOKEN"),
+        help="Bearer token required from clients (default: CATIA_MCP_TOKEN env var). "
+        "Mandatory when --host is not a loopback address.",
+    )
+    parser.add_argument(
+        "--new-token", action="store_true", help="Print a fresh random token and exit"
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    if args.new_token:
+        from catia_mcp.http_transport import new_token
+
+        print(new_token())
+        return
+    if args.http:
+        from catia_mcp.http_transport import check_bind
+
+        check_bind(args.host, args.token)
+        asyncio.run(CATIAMCPServer().run_http(args.host, args.port, args.token))
+        return
     asyncio.run(CATIAMCPServer().run())
 
 

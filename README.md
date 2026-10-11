@@ -226,6 +226,23 @@ named `catia-v5` with command `python` and args `["-m", "catia_mcp"]`,
 run from a machine where CATIA V5 is installed.
 </details>
 
+### Remote use: agent on a Mac or another machine
+
+CATIA only runs on Windows, but the agent does not have to. Start the server
+in HTTP mode next to CATIA (local PC or cloud workstation) and connect from a
+Mac with Claude Code, Cursor, VS Code or Claude Desktop:
+
+```bat
+catia-mcp --new-token
+set CATIA_MCP_TOKEN=<token>
+catia-mcp --http --host 0.0.0.0
+```
+
+The server refuses to listen beyond localhost without a token, and should be
+reached through a private network such as Tailscale or an SSH tunnel, never
+the open internet. Full setup and client configurations:
+[docs/remote-access.md](docs/remote-access.md).
+
 ### 4. Start CATIA V5
 
 Make sure CATIA V5 is running before asking your agent to interact with it. The server will automatically connect to the running instance.
@@ -260,6 +277,7 @@ catia-v5-mcp-server/
 │   ├── __main__.py          # python -m catia_mcp entry point
 │   ├── server.py            # MCP Server — tool registration & routing
 │   ├── connection.py        # COM connection manager (win32com)
+│   ├── http_transport.py    # Optional remote access (Streamable HTTP + token)
 │   └── tools/
 │       ├── __init__.py
 │       ├── document.py      # Document management (9 tools)
