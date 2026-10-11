@@ -130,7 +130,8 @@ def render_chart(clones: list[dict], views: list[dict], repo: str) -> None:
     ax1.plot(v_dates, v_vals, color="#2563eb", linewidth=2, marker="o", markersize=4)
     ax1.set_ylabel("Views / day", fontsize=11)
     ax1.set_title(
-        f"Repository traffic — {repo}    (total: {sum(v_vals):,} views • {sum(c_vals):,} clones)".replace(",", " "),
+        f"Repository traffic — {repo}    (total: {sum(v_vals):,} views • {sum(c_vals):,} clones)".replace(",", " ")
+        + f"\nlast data point: {max(v_dates[-1], c_dates[-1]):%d %b %Y}",
         fontsize=12,
         fontweight="bold",
     )
@@ -139,6 +140,22 @@ def render_chart(clones: list[dict], views: list[dict], repo: str) -> None:
     ax2.plot(c_dates, c_vals, color="#16a34a", linewidth=2, marker="o", markersize=4)
     ax2.set_ylabel("Clones / day", fontsize=11)
     ax2.set_xlabel("Date")
+
+    # Label the most recent day on each panel so the end of the data is
+    # never mistaken for the last month tick on the axis.
+    for ax, dates, vals, color in ((ax1, v_dates, v_vals, "#2563eb"), (ax2, c_dates, c_vals, "#16a34a")):
+        ax.annotate(
+            f"{dates[-1]:%d %b}: {vals[-1]}",
+            xy=(dates[-1], vals[-1]),
+            xytext=(-14, 22),
+            textcoords="offset points",
+            ha="right",
+            fontsize=9,
+            fontweight="bold",
+            color=color,
+            bbox={"boxstyle": "round,pad=0.25", "fc": "white", "ec": color, "alpha": 0.95},
+            arrowprops={"arrowstyle": "-", "color": color, "lw": 1},
+        )
 
     for ax in (ax1, ax2):
         ax.grid(alpha=0.3)
