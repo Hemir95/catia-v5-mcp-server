@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "Adam" },
+    { name = "Adam M'HAMDI" },
 ]
 keywords = ["catia", "catia-v5", "mcp", "claude", "dassault-systemes", "cao", "cad", "automation"]
 
