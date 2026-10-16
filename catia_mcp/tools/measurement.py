@@ -10,6 +10,34 @@ from typing import Any
 
 from catia_mcp.connection import CATIAConnection
 
+try:
+    import win32com.client
+
+    HAS_WIN32 = True
+except ImportError:
+    HAS_WIN32 = False
+
+
+def _spa(doc: Any) -> Any:
+    """SPA measure workbench.
+
+    R62020: ``GetWorkbench`` lives on the DOCUMENT — the Application object
+    only exposes ``GetWorkbenchId``, so ``app.GetWorkbench(...)`` raises
+    AttributeError.
+    """
+    return doc.GetWorkbench("SPAWorkbench")
+
+
+def _measurable(part: Any, spa: Any, obj: Any) -> Any:
+    """Re-wrapped SPA Measurable for ``obj``.
+
+    Through pywin32 dynamic dispatch the measurable returned by
+    ``GetMeasurable`` is inert (Volume/Area/COG read 0). Re-dispatching it
+    binds the type information and yields real values. All returned values
+    are in SI units (m3, m2, m).
+    """
+    return win32com.client.Dispatch(spa.GetMeasurable(part.CreateReferenceFromObject(obj)))
+
 
 class MeasurementTools:
     """Tools for measurement and analysis in CATIA V5."""
@@ -133,8 +161,9 @@ class MeasurementTools:
 
     def _measure_distance(self, elem1_name: str, elem2_name: str) -> str:
         self.conn.ensure_connected()
+        doc = self.conn.active_document
         part = self.conn.get_active_part()
-        spa = self.conn.app.GetWorkbench("SPAWorkbench")
+        spa = _spa(doc)
 
         # Create references from names
         sel = self.conn.hso
@@ -153,32 +182,35 @@ class MeasurementTools:
         ref2 = part.CreateReferenceFromObject(sel.Item(1).Value)
         sel.Clear()
 
-        # Measure
-        measurable = spa.GetMeasurable(ref1)
-        distance = measurable.GetMinimumDistance(ref2)
+        # Measure (COM returns meters -> convert to mm)
+        measurable = win32com.client.Dispatch(spa.GetMeasurable(ref1))
+        distance_mm = float(measurable.GetMinimumDistance(ref2)) * 1000.0
 
-        return f"Minimum distance between '{elem1_name}' and '{elem2_name}': {distance:.4f} mm"
+        return f"Minimum distance between '{elem1_name}' and '{elem2_name}': {distance_mm:.4f} mm"
 
     def _get_inertia(self, density: float | None = None) -> str:
         self.conn.ensure_connected()
-        spa = self.conn.app.GetWorkbench("SPAWorkbench")
+        doc = self.conn.active_document
+        spa = _spa(doc)
         part = self.conn.get_active_part()
         body = self.conn.get_active_part_body()
-        ref = part.CreateReferenceFromObject(body)
 
-        measurable = spa.GetMeasurable(ref)
+        measurable = _measurable(part, spa, body)
 
         result: dict[str, Any] = {}
 
         try:
-            result["volume_mm3"] = round(measurable.Volume, 4)
-            result["volume_cm3"] = round(measurable.Volume / 1000, 4)
+            # COM returns SI units: m3 -> mm3 (x1e9), m2 -> mm2 (x1e6)
+            volume_m3 = float(measurable.Volume)
+            result["volume_mm3"] = round(volume_m3 * 1e9, 4)
+            result["volume_cm3"] = round(volume_m3 * 1e6, 4)
         except Exception:
             pass
 
         try:
-            result["area_mm2"] = round(measurable.Area, 4)
-            result["area_cm2"] = round(measurable.Area / 100, 4)
+            area_m2 = float(measurable.Area)
+            result["area_mm2"] = round(area_m2 * 1e6, 4)
+            result["area_cm2"] = round(area_m2 * 1e4, 4)
         except Exception:
             pass
 
@@ -186,16 +218,16 @@ class MeasurementTools:
             cog = [0.0, 0.0, 0.0]
             measurable.GetCOG(cog)
             result["center_of_gravity_mm"] = {
-                "x": round(cog[0], 4),
-                "y": round(cog[1], 4),
-                "z": round(cog[2], 4),
+                "x": round(cog[0] * 1000.0, 4),
+                "y": round(cog[1] * 1000.0, 4),
+                "z": round(cog[2] * 1000.0, 4),
             }
         except Exception:
             pass
 
         if density and "volume_mm3" in result:
-            volume_m3 = result["volume_mm3"] * 1e-9  # mm3 to m3
-            mass_kg = density * volume_m3
+            # SI: density kg/m3 x volume m3 = mass kg
+            mass_kg = density * float(measurable.Volume)
             result["mass_kg"] = round(mass_kg, 6)
             result["mass_g"] = round(mass_kg * 1000, 3)
             result["density_kg_m3"] = density
@@ -215,23 +247,43 @@ class MeasurementTools:
 
     def _get_bounding_box(self) -> str:
         self.conn.ensure_connected()
-        spa = self.conn.app.GetWorkbench("SPAWorkbench")
+        doc = self.conn.active_document
+        spa = _spa(doc)
         part = self.conn.get_active_part()
         body = self.conn.get_active_part_body()
-        ref = part.CreateReferenceFromObject(body)
 
-        measurable = spa.GetMeasurable(ref)
+        # Measurable has no bounding-box member in the V5 automation API
+        # (checked against the B30 type libraries): derive it from vertices.
+        sel = self.conn.hso
+        sel.Clear()
+        sel.Add(body)
+        sel.Search("Topology.Vertex,sel")
+        xs: list[float] = []
+        ys: list[float] = []
+        zs: list[float] = []
+        for i in range(1, sel.Count + 1):
+            try:
+                m = _measurable(part, spa, sel.Item(i).Value)
+                pt = [0.0, 0.0, 0.0]
+                m.GetPoint(pt)
+                # COM returns meters -> mm
+                xs.append(pt[0] * 1000.0)
+                ys.append(pt[1] * 1000.0)
+                zs.append(pt[2] * 1000.0)
+            except Exception:
+                continue
+        sel.Clear()
 
-        bbox = [0.0] * 6  # xmin, ymin, zmin, xmax, ymax, zmax
-        measurable.GetBoundingBox(bbox)
+        if not xs:
+            return "Bounding box unavailable: no measurable vertices found on the active body."
 
         result = {
-            "min": {"x": round(bbox[0], 4), "y": round(bbox[1], 4), "z": round(bbox[2], 4)},
-            "max": {"x": round(bbox[3], 4), "y": round(bbox[4], 4), "z": round(bbox[5], 4)},
+            "min": {"x": round(min(xs), 4), "y": round(min(ys), 4), "z": round(min(zs), 4)},
+            "max": {"x": round(max(xs), 4), "y": round(max(ys), 4), "z": round(max(zs), 4)},
             "dimensions": {
-                "length_x": round(bbox[3] - bbox[0], 4),
-                "length_y": round(bbox[4] - bbox[1], 4),
-                "length_z": round(bbox[5] - bbox[2], 4),
+                "length_x": round(max(xs) - min(xs), 4),
+                "length_y": round(max(ys) - min(ys), 4),
+                "length_z": round(max(zs) - min(zs), 4),
             },
         }
         return json.dumps(result, indent=2)

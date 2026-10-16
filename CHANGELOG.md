@@ -2,6 +2,39 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Fixed (CATIA V5-6R2020 / B30, verified against a live instance)
+
+- **Part Design**: Pad/Pocket/Hole raised `E_FAIL` on freshly created documents
+  because the in-work object is a *Geometrical Set* — the sketch's body is now
+  forced in-work before feature creation.
+- **Part Design**: Shaft/Groove drive the revolution axis from the sketch's
+  `AbsoluteAxis.VDirection` (a drawn line axis raises `E_FAIL`; wrapping the
+  sketch itself with `CreateReferenceFromObject` raises `DISP_E_BADTYPE`) and
+  set `FirstAngle` through the parameter object (dynamic-dispatch PUTs fail on
+  factory-returned objects).
+- **Part Design**: Hole uses `AddNewHoleFromSketch(sketch, depth)` — plain
+  `AddNewHole(sketch, depth)` fails with a type mismatch on R62020 — and sets
+  Diameter/BottomType/ThreadingMode via the dispatch fallback. Threading mode
+  is `0` (`catThreadedHoleThreading`), not 1 (smooth).
+- **Sketcher**: constraint type codes corrected against the B30 type libraries
+  (`CatConstraintType`: distance=1, length=5, radius=14, angle=6, on=2,
+  tangency=4, parallelism=8, horizontality=10, perpendicularity=11,
+  verticality=13, reference=0). Angle values are converted to radians and
+  dimensional constraints are set driving (`Mode=0`).
+- **Sketcher**: arcs use `Factory2D.CreateCircle` with radian angles
+  (`CreateArc` does not resolve through IDispatch on R62020), with a polyline
+  fallback; `OpenEdition` returning `None` is retried once.
+- **Measurement**: `GetWorkbench("SPAWorkbench")` lives on the **Document**, not
+  on the Application (Application only has `GetWorkbenchId`) — the previous
+  calls raised AttributeError on every measurement tool.
+- **Measurement**: SPA `Measurable` objects are re-dispatched before reading;
+  through pywin32 dynamic dispatch Volume/Area/COG otherwise read 0.
+- **Measurement**: the COM API returns SI units (m3, m2, m) — outputs are now
+  converted to mm-based values; the bounding box is derived from vertex points
+  (`Measurable` has no bounding-box member in the V5 automation API).
+
 ## [0.2.0] — 2026-08-20
 
 ### Added

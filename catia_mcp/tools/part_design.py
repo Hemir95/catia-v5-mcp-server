@@ -12,6 +12,47 @@ from typing import Any
 from catia_mcp.connection import CATIAConnection
 
 
+def _set_prop(obj: Any, name: str, value: Any) -> bool:
+    """Set a COM property with a dynamic-dispatch fallback.
+
+    On several CATIA releases (R62020 verified) direct property PUTs fail on
+    objects returned by factory methods; properties that return parameter
+    objects must be set through their ``Value`` attribute instead.
+    """
+    try:
+        setattr(obj, name, value)
+        return True
+    except Exception:
+        try:
+            getattr(obj, name).Value = value
+            return True
+        except Exception:
+            return False
+
+
+def _force_solid_inwork(part: Any, sketch: Any) -> None:
+    """Make sure the body owning ``sketch`` is the in-work object.
+
+    Freshly created Part documents start with a Geometrical Set as the
+    in-work object (R62020); Pad/Pocket/Hole then fail with E_FAIL until
+    the target body is made in-work.
+    """
+    try:
+        target = part.MainBody
+        try:
+            parent = sketch.Parent
+            # Sketch.Parent is the Sketches collection -> climb to the Body
+            if getattr(parent, "Name", "") in ("Sketches", "HybridSketches"):
+                parent = parent.Parent
+            if parent is not None:
+                target = parent
+        except Exception:
+            pass
+        part.InWorkObject = target
+    except Exception:
+        pass
+
+
 class PartDesignTools:
     """Tools for 3D Part Design features in CATIA V5."""
 
@@ -70,6 +111,11 @@ class PartDesignTools:
                             "description": "Cut direction: 'normal' (default), 'reverse'",
                             "enum": ["normal", "reverse"],
                             "default": "normal",
+                        },
+                        "symmetric": {
+                            "type": "boolean",
+                            "description": "If true, mirrored extent: cuts equally on both sides (reliable on R62020)",
+                            "default": False,
                         },
                         "sketch_name": {
                             "type": "string",
@@ -443,6 +489,9 @@ class PartDesignTools:
         sf = part.ShapeFactory
 
         sketch = self._get_last_sketch(args.get("sketch_name"))
+        # R62020: solid features fail with E_FAIL unless the sketch's BODY is
+        # the in-work object (fresh docs start on a Geometrical Set).
+        _force_solid_inwork(part, sketch)
         height = args["height"]
         direction = args.get("direction", "normal")
         symmetric = args.get("symmetric", False)
@@ -467,12 +516,19 @@ class PartDesignTools:
         sf = part.ShapeFactory
 
         sketch = self._get_last_sketch(args.get("sketch_name"))
+        _force_solid_inwork(part, sketch)
         depth = args["depth"]
 
         pocket = sf.AddNewPocket(sketch, depth)
 
         if args.get("direction") == "reverse":
+            # CatPrismOrientation: catInverseOrientation = 1. NOTE: on R62020
+            # the property is accepted (readback = 1) but the cut side may not
+            # change; verify geometry or use 'symmetric' for two-sided cuts.
             pocket.DirectionOrientation = 1
+        if args.get("symmetric"):
+            # Mirrored extent: cuts equally on both sides (verified on R62020)
+            _set_prop(pocket, "IsSymmetric", True)
 
         part.UpdateObject(pocket)
         self.conn.refresh_display()
@@ -487,10 +543,21 @@ class PartDesignTools:
         sketch = self._get_last_sketch(args.get("sketch_name"))
         angle = args.get("angle", 360)
 
+        # R62020: pass the sketch OBJECT (CreateReferenceFromObject raises
+        # DISP_E_BADTYPE) and drive the revolution axis from the sketch's
+        # reference frame (AbsoluteAxis.VDirection); a drawn line axis
+        # raises E_FAIL. Solid features also need the sketch's BODY in-work.
+        _force_solid_inwork(part, sketch)
         shaft = sf.AddNewShaft(sketch)
-        shaft.FirstAngle = angle
+        abs_axis = sketch.GeometricElements.Item("AbsoluteAxis")
+        vdir = abs_axis.GetItem("VDirection")
+        shaft.RevoluteAxis = part.CreateReferenceFromObject(vdir)
+        _set_prop(shaft, "FirstAngle", angle)
 
-        part.UpdateObject(shaft)
+        try:
+            part.UpdateObject(shaft)
+        except Exception:
+            part.Update()
         self.conn.refresh_display()
         return f"Shaft (revolution) created: {angle}°. Feature: '{shaft.Name}'"
 
@@ -503,10 +570,18 @@ class PartDesignTools:
         sketch = self._get_last_sketch(args.get("sketch_name"))
         angle = args.get("angle", 360)
 
+        _force_solid_inwork(part, sketch)
         groove = sf.AddNewGroove(sketch)
-        groove.FirstAngle = angle
+        # R62020: revolution axis via the sketch's AbsoluteAxis.VDirection
+        abs_axis = sketch.GeometricElements.Item("AbsoluteAxis")
+        vdir = abs_axis.GetItem("VDirection")
+        groove.RevoluteAxis = part.CreateReferenceFromObject(vdir)
+        _set_prop(groove, "FirstAngle", angle)
 
-        part.UpdateObject(groove)
+        try:
+            part.UpdateObject(groove)
+        except Exception:
+            part.Update()
         self.conn.refresh_display()
         return f"Groove (revolution cut) created: {angle}°. Feature: '{groove.Name}'"
 
@@ -559,14 +634,26 @@ class PartDesignTools:
         diameter = args["diameter"]
         depth = args["depth"]
 
-        hole = sf.AddNewHole(sketch, depth)
-        hole.Diameter = diameter
-        hole.BottomType = 0  # catFlatBottom
+        # R62020: AddNewHole(sketch, depth) fails with a type mismatch;
+        # AddNewHoleFromSketch(sketch, depth) is the working call.
+        hole = sf.AddNewHoleFromSketch(sketch, depth)
+        _set_prop(hole, "Diameter", diameter)
+        _set_prop(hole, "BottomType", 0)  # catFlatHoleBottom
+
+        try:
+            part.UpdateObject(hole)
+        except Exception:
+            part.Update()
 
         if args.get("threaded", False):
-            hole.ThreadingMode = 1  # catThreaded
-
-        part.UpdateObject(hole)
+            # Threading on a not-yet-updated hole breaks the rebuild on
+            # R62020: apply it after the hole has materialized.
+            # CatHoleThreadingMode: catThreadedHoleThreading = 0, smooth = 1
+            if _set_prop(hole, "ThreadingMode", 0):
+                try:
+                    part.Update()
+                except Exception:
+                    pass
         self.conn.refresh_display()
         return f"Hole created: D{diameter} mm, depth {depth} mm. Feature: '{hole.Name}'"
 

@@ -297,9 +297,22 @@ class SketcherTools:
         sketches = body.Sketches
         sketch = sketches.Add(ref)
 
-        # Open the sketch for editing
+        # Open the sketch for editing (R62020: the first OpenEdition can
+        # return None -> close/reopen once before giving up)
+        try:
+            factory = sketch.OpenEdition()
+        except Exception:
+            factory = None
+        if factory is None:
+            try:
+                sketch.CloseEdition()
+                sketch = sketches.Add(ref)
+                factory = sketch.OpenEdition()
+            except Exception as e:
+                raise RuntimeError(f"Failed to open sketch edition: {e}") from e
+
         self._active_sketch = sketch
-        self._active_factory = sketch.OpenEdition()
+        self._active_factory = factory
 
         plane_names = {"xy": "XY (front)", "yz": "YZ (right)", "zx": "ZX (top)"}
         return f"Sketch created on {plane_names.get(plane_key, plane)} plane. Ready for geometry."
@@ -354,10 +367,20 @@ class SketcherTools:
         self._ensure_sketch_open()
         factory = self._active_factory
         import math
-        # CATIA CreateArc expects angles in radians
         start_rad = math.radians(start_angle)
         end_rad = math.radians(end_angle)
-        factory.CreateArc(cx, cy, radius, start_rad, end_rad)
+        try:
+            # R62020: the arc form is Factory2D.CreateCircle with RADIAN
+            # angles (CreateArc does not resolve through IDispatch there)
+            factory.CreateCircle(cx, cy, radius, start_rad, end_rad)
+        except Exception:
+            steps = max(8, int(abs(end_angle - start_angle) / 5))
+            pts = []
+            for i in range(steps + 1):
+                ang = math.radians(start_angle + (end_angle - start_angle) * i / steps)
+                pts.append((cx + radius * math.cos(ang), cy + radius * math.sin(ang)))
+            for i in range(steps):
+                factory.CreateLine(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1])
         return (
             f"Arc created at ({cx}, {cy}), radius={radius} mm, "
             f"from {start_angle}° to {end_angle}°"
@@ -403,6 +426,13 @@ class SketcherTools:
         constraints = sketch.Constraints
         geom = sketch.GeometricElements
 
+        # CatConstraintType values verified against the B30 (R62020) type
+        # libraries: distance=1, length=5, radius=14, angle=6; on=2,
+        # concentricity=3, tangency=4, parallelism=8, horizontality=10,
+        # perpendicularity=11, verticality=13, reference=0.
+        # Dimensional values: lengths in mm, angles in RADIANS (COM).
+        import math
+
         # Dimensional constraints (need a geometry reference + value)
         if constraint_type in ("distance", "radius", "angle"):
             if value is None:
@@ -414,32 +444,36 @@ class SketcherTools:
 
             if constraint_type == "distance" and idx2 is not None:
                 ref2 = geom.Item(idx2)
-                cst = constraints.AddBiEltCst(0, ref1, ref2)  # catCstTypeDistance = 0
-                cst.Dimension.Value = value
+                cst = constraints.AddBiEltCst(1, ref1, ref2)  # catCstTypeDistance
             elif constraint_type == "distance":
-                cst = constraints.AddMonoEltCst(0, ref1)  # Length constraint
-                cst.Dimension.Value = value
+                cst = constraints.AddMonoEltCst(5, ref1)  # catCstTypeLength
             elif constraint_type == "radius":
-                cst = constraints.AddMonoEltCst(1, ref1)  # catCstTypeRadius = 1
-                cst.Dimension.Value = value
-            elif constraint_type == "angle":
+                cst = constraints.AddMonoEltCst(14, ref1)  # catCstTypeRadius
+            else:  # angle
                 if idx2 is None:
                     raise ValueError("Angle constraint requires 'geometry_index_2'.")
                 ref2 = geom.Item(idx2)
-                cst = constraints.AddBiEltCst(2, ref1, ref2)  # catCstTypeAngle = 2
-                cst.Dimension.Value = value
+                cst = constraints.AddBiEltCst(6, ref1, ref2)  # catCstTypeAngle
+
+            try:
+                cst.Mode = 0  # catCstModeDrivingDimension
+            except Exception:
+                pass
+            cst.Dimension.Value = (
+                math.radians(value) if constraint_type == "angle" else value
+            )
 
             return f"{constraint_type.capitalize()} constraint added: {value} {'mm' if constraint_type != 'angle' else '°'}"
 
         # Geometric constraints (no value needed)
         cst_type_map = {
-            "coincidence": 3,   # catCstTypeOn
-            "tangent": 4,       # catCstTypeTangent
-            "perpendicular": 6, # catCstTypePerpendicular
-            "parallel": 7,      # catCstTypeParallel
-            "horizontal": 8,    # catCstTypeHorizontality
-            "vertical": 9,      # catCstTypeVerticality
-            "fix": 10,          # catCstTypeFix
+            "coincidence": 2,       # catCstTypeOn (coincident / on element)
+            "tangent": 4,           # catCstTypeTangency
+            "perpendicular": 11,    # catCstTypePerpendicularity
+            "parallel": 8,          # catCstTypeParallelism
+            "horizontal": 10,       # catCstTypeHorizontality
+            "vertical": 13,         # catCstTypeVerticality
+            "fix": 0,               # catCstTypeReference (+ ReferenceType fix-in-space)
         }
 
         cst_code = cst_type_map.get(constraint_type)
@@ -450,7 +484,12 @@ class SketcherTools:
             if idx1 is None:
                 raise ValueError(f"Constraint '{constraint_type}' requires 'geometry_index_1'.")
             ref1 = geom.Item(idx1)
-            constraints.AddMonoEltCst(cst_code, ref1)
+            cst = constraints.AddMonoEltCst(cst_code, ref1)
+            if constraint_type == "fix":
+                try:
+                    cst.ReferenceType = 1  # catCstRefTypeFixInSpace
+                except Exception:
+                    pass
         else:
             if idx1 is None or idx2 is None:
                 raise ValueError(
@@ -458,7 +497,7 @@ class SketcherTools:
                 )
             ref1 = geom.Item(idx1)
             ref2 = geom.Item(idx2)
-            constraints.AddBiEltCst(cst_code, ref1, ref2)
+            cst = constraints.AddBiEltCst(cst_code, ref1, ref2)
 
         return f"{constraint_type.capitalize()} constraint added"
 
