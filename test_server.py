@@ -18,6 +18,7 @@ def test_imports():
     from catia_mcp.tools.part_design import PartDesignTools
     from catia_mcp.tools.gsd import GSDTools
     from catia_mcp.tools.assembly import AssemblyTools
+    from catia_mcp.tools.detail import DetailTools
     from catia_mcp.tools.measurement import MeasurementTools
     from catia_mcp.tools.export import ExportTools
     print("  All modules imported successfully")
@@ -32,6 +33,7 @@ def test_tool_definitions():
     from catia_mcp.tools.part_design import PartDesignTools
     from catia_mcp.tools.gsd import GSDTools
     from catia_mcp.tools.assembly import AssemblyTools
+    from catia_mcp.tools.detail import DetailTools
     from catia_mcp.tools.measurement import MeasurementTools
     from catia_mcp.tools.export import ExportTools
 
@@ -42,6 +44,7 @@ def test_tool_definitions():
         "Part Design": PartDesignTools(conn),
         "GSD": GSDTools(conn),
         "Assembly": AssemblyTools(conn),
+        "Detail": DetailTools(conn),
         "Measurement": MeasurementTools(conn),
         "Export": ExportTools(conn),
     }

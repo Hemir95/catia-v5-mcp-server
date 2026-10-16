@@ -4,6 +4,25 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **New `detail` module (20 tools)** for detail engineering (addresses #2):
+  sketch editing (`catia_sketch_edit_open/close`) with drawing and **driving
+  dimensional constraints** (`catia_sketch_constrain`: distance/length/radius/
+  angle with values — angles in radians at COM level, driving mode set),
+  constraint listing, user **parameters** (dimension/real/integer/boolean/
+  string) and **formulas** (Knowledgeware `Relations.CreateFormula`), relation
+  listing, multi-body management (`catia_body_create`, `catia_bodies_list`,
+  `catia_set_inwork`), **boolean operations** (`catia_boolean`: add/subtract/
+  intersect — on R62020 they take the body OBJECT and subtraction is
+  `AddNewRemove`), **hole threading** configuration
+  (`catia_hole_thread`: pitch/depth/side applied to an existing Hole, nominal
+  `ThreadDiameter` left to CATIA's standard tables), feature rename/delete,
+  face listing, circular-edge/cylindrical-face measurement
+  (`catia_measure_circles`), material listing/application, and a
+  `catia_run_catscript` escape hatch that executes an ad-hoc CATScript and
+  reads back its output file.
+
 ### Fixed (CATIA V5-6R2020 / B30, verified against a live instance)
 
 - **Part Design**: Pad/Pocket/Hole raised `E_FAIL` on freshly created documents
